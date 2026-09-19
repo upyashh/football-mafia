@@ -131,21 +131,42 @@ Casual fans with no strong club/country affiliation; fans primarily seeking bett
 
 **Acceptance criteria:** Score/event data updates within the latency budget defined by the data provider tier (see §11); match page loads and renders correctly with zero live events (pre-match state) and with a full timeline (post-match state).
 
-### 8.3 Live Match Room (chat)
-- One live chat room per match (global room at MVP — do not fragment into empty sub-rooms; see §12 open decision on room taxonomy)
+### 8.3 Stands & Live Match Chat
+
+> **Updated 2026-09-19 — supersedes the "one global room" framing below.** See `decisions.md` ("Room taxonomy: Stands replace the single global room") for the full decision record. This resolves §12.2 and §12.3 in favor of Doc B's richer taxonomy.
+
+- **Stands** are persistent communities, not spawned per match, with three visibility levels: **public global** (e.g. a "Global Terrace"), **public community** (e.g. a city/regional stand like "HSR Bangalore"), and **private/invite-only** (friend groups).
+- A user can belong to multiple Stands. Opening a Stand while more than one match is live shows the member which live match's chat to join — hierarchy is **Stand → match → chat**.
+- Each `(stand, match)` pair has its own independent chat thread and live-viewer count — the same match's chat in "Global Terrace" and in a private friend Stand are separate rooms, not one room filtered by membership.
 - Text messages + emoji reactions
 - Goal / card / substitution events appear as inline markers inside the chat stream, not as a separate feed
-- Join/leave room; live participant count visible
+- Join/leave a Stand; live participant count visible per (stand, match) room
+- **Ephemeral chat:** a match's chat in a given Stand disappears some time after full-time — no replay/history browsing in MVP (see `decisions.md`)
 - Basic moderation: report button, mute, word filters, rate limiting
 
 **User story:** *As a fan watching alone, I want to see the goal event appear in the same stream as fan reactions so that the moment feels shared rather than reported to me after the fact.*
 **Acceptance criteria:** A goal event ingested from the data provider produces an inline marker in the chat feed within [latency budget] of the event; reporting a message removes it from the reporter's view immediately and flags it for moderation review; rate limiting prevents a single user from exceeding [N messages/minute — to be set].
+
+### 8.3a Stands directory / switcher
+- A dedicated screen listing Stands a user can join or has joined: name, visibility (public/private), live/active member count, total member count.
+- Users can join public Stands directly; private Stands require an invite.
+
+**Acceptance criteria:** A new user can discover and join at least one public Stand beyond their default club community without any invite.
 
 ### 8.4 Club Community Feed
 - Default feed = user's club community (chronological, not algorithmic — chronological is explicitly fine below ~50k users)
 - Posts: text + one image, comments, likes, follows
 
 **Acceptance criteria:** New users with zero follows still see a populated, relevant feed via club membership alone.
+
+### 8.7 Predict (added to MVP 2026-09-19 — see `decisions.md`)
+- Standalone **Predict** tab (peer to Live/Stands/Profile).
+- Pre-match pick per fixture (e.g. win/draw/loss or scoreline), locked at kickoff, resolved automatically against match data once it's final.
+- **Flash pick:** a rolling in-match prediction shown inline in the live view (both the Stands chat and the global match view) — e.g. "next 5 mins: Goal / Card / Corner / Quiet" — with a live % breakdown of what other users in that `(stand, match)` room picked. Locks/resolves on a short timer, not at kickoff.
+- Basic personal result feedback: last prediction's outcome and any points/XP gained, surfaced on the global match view per the reference designs.
+
+**User story:** *As a fan, I want to make a quick pick on what happens next and see how my read compares to everyone else's, so predicting feels like part of watching, not a separate app.*
+**Acceptance criteria:** A pre-match pick cannot be submitted after kickoff; a flash pick cannot be changed after its window closes; both resolve automatically without manual intervention once the relevant match/event data is final.
 
 ### 8.5 Match Log
 - One-tap "I watched this" on any match page
@@ -155,9 +176,11 @@ Casual fans with no strong club/country affiliation; fans primarily seeking bett
 **Acceptance criteria:** Logging a match works fully offline of any social interaction; logged matches accumulate into a visible personal history on the profile.
 
 ### 8.6 Explicitly OUT of MVP
-DMs, voice chat, video/streaming, full fantasy football engine, betting/payments, creator monetization, news aggregation, algorithmic feed ranking, multi-sport support, precise location-based discovery, advanced player analytics, elaborate badge/gamification systems, private user-created rooms (deferred — see §12).
+DMs, voice chat, video/streaming, full fantasy football engine, betting/payments, creator monetization, news aggregation, algorithmic feed ranking, multi-sport support, precise location-based discovery, advanced player analytics, elaborate badge/gamification systems, chat replay/archive for finished matches.
 
 *Rationale:* every one of these either adds moderation/legal surface area before the core loop is validated, or adds complexity that doesn't help answer the core hypothesis in §3.
+
+*Note (2026-09-19): private user-created rooms were previously listed here as deferred; per the updated §8.3/§12.2/§12.3 decision, private Stands are now IN MVP.*
 
 ---
 
@@ -192,9 +215,10 @@ Full video/streaming (cost + rights risk — sit alongside whatever broadcast th
 
 | Stage | Provider | Notes |
 |---|---|---|
-| Prototype | API-Football (api-sports.io) free tier | ~100 req/day, richest data for building the match page UI; too small for production live polling |
-| Launch | football-data.org free tier | ~12 top competitions free forever, ~10 req/min — enough to poll live matches every 60–90s; accept ~1-minute score latency and limited event granularity at first |
-| Scale | Paid tier of the same or a comparable provider | Ballpark $30–150/mo; **verify current pricing at decision time**, not from this document |
+| **Current dev/build** | **Self-built mock API**, same contract as OpenFootAPI | Simulates live matches (scripted score/event progression) — no real fetch. Built specifically so the real OpenFootAPI (or another provider) is a base-URL/config swap later, not a rewrite. See `decisions.md` "Data provider for MVP: self-built mock API". |
+| Real-data validation | **OpenFootAPI**, Starter tier (free, 5,000 req/mo) | Evaluated and confirmed live 2026-09-14/2026-09-19 — see `provider-adapter.md`. Covers fixtures, live score/status, standings; goal/card/sub event timelines, lineups, and SSE push need the Developer tier ($14/mo); Starter's binding constraint is the monthly quota, not a per-minute limit. |
+| Launch | OpenFootAPI Developer tier (or re-evaluate at decision time) | Unlocks real event/lineup data + more quota headroom |
+| Scale | Paid tier of the same or a comparable provider | **Verify current pricing at decision time**, not from this document |
 | Fantasy companion | FPL API (open, unofficial) | Free; powers all Phase 3 fantasy-companion features |
 
 **Architectural rules (non-negotiable):**
@@ -214,20 +238,20 @@ These are genuine conflicts or unresolved points between the two source document
  - Doc B: launch anchored on **marquee global matches** (World Cup, Champions League knockouts, El Clásico) where concentrated demand exists regardless of club affiliation.
  - *These are different go-to-market motions and probably imply different acquisition channels and different launch timing (event calendar vs. any time). Needs a decision before marketing/launch planning starts.*
 
-2. **Room taxonomy: one global room vs. room-per-affiliation.**
+2. **Room taxonomy: one global room vs. room-per-affiliation.** — **RESOLVED 2026-09-19, see `decisions.md`.**
  - Doc A implies a single match chat room per match (with events as inline markers), keeping rivalry rooms as a Phase 3 feature.
  - Doc B proposes richer taxonomy from the start — global room, per-team rooms, per-country rooms, per-city/local rooms — while simultaneously warning against creating dozens of empty rooms.
- - *Recommendation in this PRD (§8.3): start with one global room per match at MVP, and treat room-splitting as a Phase 2/3 decision gated on volume per match, per Doc B's own principle: "one large room with 10 users beats 10 rooms with 1 user each."* This needs explicit sign-off since it narrows Doc B's original MVP.
+ - *Resolution: reference designs made clear that community-fragmented rooms ("Stands") are core to the product feel, not deferrable. MVP now ships Stands (public global / public community / private) with a stand→match→chat hierarchy — see §8.3.* This reverses this PRD's original recommendation in favor of Doc B.
 
-3. **Private, invite-only rooms: MVP or later?**
+3. **Private, invite-only rooms: MVP or later?** — **RESOLVED 2026-09-19, see `decisions.md`.**
  - Doc B includes user-created private rooms (a WhatsApp/Meet replacement for existing friend groups) as part of its proposed MVP.
  - Doc A defers anything room-taxonomy-related beyond the global room to Phase 3 ("Derby-week rivalry rooms").
- - *This PRD currently scopes private rooms OUT of MVP (§8.6) to keep the MVP surface minimal, but this is the single feature most likely to be worth pulling forward if early user interviews (§15) show strong demand from existing friend groups.*
+ - *Resolution: private Stands are now IN MVP, resolved together with decision #2 above — a private Stand is just a Stand with `visibility = private`, not a separate mechanic.*
 
-4. **Predictions timing.**
+4. **Predictions timing.** — **RESOLVED 2026-09-19, see `decisions.md`.**
  - Doc A sequences predictions into Phase 2, after the core scores+chat+identity loop is validated.
  - Doc B includes basic predictions in its proposed MVP.
- - *This PRD follows Doc A's sequencing (§9) to keep MVP scope defensible, but flags that predictions are cheap to build (simple pre-match winner pick) and could be pulled into MVP if resourcing allows — this is a call for whoever owns the MVP cut line.*
+ - *Resolution: predictions are pulled into MVP — both a pre-match pick and a live in-match "flash pick" widget, plus a standalone Predict tab. See §8.7. This reverses Doc A's sequencing in favor of Doc B, confirmed explicitly rather than inferred from the reference designs alone.*
 
 5. **Fan mood / prediction-reputation mechanics** (Doc B, §13 and §12 of the raw brainstorm) are not currently placed on any phase of this roadmap. They are lower priority than the core loops but should be explicitly triaged into Phase 2/3 backlog or explicitly cut, rather than left in limbo.
 

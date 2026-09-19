@@ -153,14 +153,35 @@ create table match_events (
   unique (match_id, provider_event_key)
 );
 
--- ---------- live rooms & chat ----------
+-- ---------- stands (persistent communities) & live rooms ----------
+-- Updated 2026-09-19: replaces the single-global-room model. See decisions.md
+-- ("Room taxonomy: Stands replace the single global room").
+create table stands (
+  id           bigserial primary key,
+  name         text not null,
+  visibility   text not null,                      -- public_global | public_community | private
+  owner_id     uuid references profiles(id),        -- null for platform-created stands (e.g. Global Terrace)
+  member_count int not null default 0,               -- denormalized; kept in sync by trigger or app code
+  created_at   timestamptz not null default now()
+);
+
+create table stand_members (
+  stand_id  bigint not null references stands(id) on delete cascade,
+  user_id   uuid not null references profiles(id) on delete cascade,
+  role      text not null default 'member',          -- member | admin, relevant for private stands
+  joined_at timestamptz not null default now(),
+  primary key (stand_id, user_id)
+);
+
 create table chat_rooms (
   id         bigserial primary key,
+  stand_id   bigint not null references stands(id) on delete cascade,
   match_id   bigint not null references matches(id) on delete cascade,
-  type       text not null default 'global',       -- MVP: one 'global' room per match
   created_at timestamptz not null default now(),
-  unique (match_id, type)
+  unique (stand_id, match_id)                        -- one chat thread per (stand, match) pair, not per match
 );
+-- Ephemeral per decisions.md: chat_rooms (and their messages) for a finished
+-- match are deleted/TTL'd some time after full-time — no replay in MVP.
 
 create table messages (
   id         bigserial primary key,
@@ -247,7 +268,7 @@ create table blocked_words (                         -- word filter source of tr
   word text primary key
 );
 
--- ---------- Phase 2 (defined now for forward-compat, built later) ----------
+-- ---------- predictions (MVP, not Phase 2 — updated 2026-09-19, PRD §8.7) ----------
 create table predictions (
   id         bigserial primary key,
   user_id    uuid not null references profiles(id),
@@ -258,11 +279,32 @@ create table predictions (
   created_at timestamptz not null default now(),
   unique (user_id, match_id)                         -- lock enforced in app: reject writes after kickoff
 );
+
+create table flash_picks (
+  id         bigserial primary key,
+  room_id    bigint not null references chat_rooms(id) on delete cascade,  -- scoped per (stand, match), not per match
+  window_start timestamptz not null,
+  window_end   timestamptz not null,                 -- short window (e.g. next 5 mins), not kickoff-locked
+  options    jsonb not null,                          -- e.g. ["goal","card","corner","quiet"]
+  resolved_option text,                               -- null until the window's outcome is determined
+  created_at timestamptz not null default now()
+);
+
+create table flash_pick_votes (
+  flash_pick_id bigint not null references flash_picks(id) on delete cascade,
+  user_id       uuid not null references profiles(id),
+  option        text not null,
+  created_at    timestamptz not null default now(),
+  primary key (flash_pick_id, user_id)                -- one vote per user per flash pick; app rejects changes after window_end
+);
 ```
 
 **RLS policy intent (the authorization backbone — do not rely on client checks):**
 
 - `profiles`, `posts`, `comments`, `messages`, `match_logs`, `predictions`: readable per the visibility rules (community/public), but **insert/update/delete only where `user_id = auth.uid()`**.
+- `flash_picks`: readable by members of the room's `stand_id` (same gate as `messages`). `flash_pick_votes`: insertable only where `user_id = auth.uid()` and only before `window_end`; resolving `flash_picks.resolved_option` is service-role only (driven by ingested match events).
+- `stands`: `public_global`/`public_community` rows are readable by anyone; `private` rows are readable only to members (join via `stand_members`). Joining a public stand is a direct insert into `stand_members`; joining a private stand requires an invite/accept flow (out of scope to design here in detail).
+- `chat_rooms`/`messages` for a given room are readable only to members of that room's `stand_id` (join through `stand_members`) — this is the access-control point that makes a private Stand's match chat actually private.
 - Reference tables (`clubs`, `competitions`, `teams`, `matches`, `match_events`): read-only to clients; writes restricted to the service role (the worker).
 - `reports`: a user can insert their own reports and read only their own; moderation review happens through the service role / an internal tool.
 - `mutes`, `likes`, `follows`, `reactions`: scoped to the acting user.
@@ -290,14 +332,15 @@ Polling a provider every ~30–90s, diffing responses, and writing events is a *
 
 - Poll **one centralized "live matches" call** per cycle, not one call per match — this returns all in-play games at once, so provider rate limits are effectively per-app regardless of audience size (PRD §11).
 - Cadence: adaptive. Poll faster (e.g. ~15–30s) while any match in a covered competition is `LIVE`; back off to minutes when nothing is live. This respects the rate cap and saves quota.
+- ⚠️ **Verified against OpenFootAPI 2026-09-19 (see `provider-adapter.md`): the binding constraint on Starter is the 5,000 req/month quota, not a per-minute cap.** A naive 60s poll across even 5 competitions exhausts a month's quota in under a day. Narrow polling to competitions/dates with matches actually scheduled today (not a broad sweep), and log the provider's self-reported `meta.access.remaining` every cycle so the worker throttles itself before hitting zero. This may make the Developer tier ($14/mo, 250k req/mo) worth budgeting for its quota headroom alone, independent of the event/lineup data gate.
 - **Idempotency:** every event carries a stable `provider_event_key`; the `unique (match_id, provider_event_key)` constraint makes re-ingesting the same poll a no-op. Never assume the provider only sends an event once.
 - On each cycle: upsert match state (score, minute, status) → detect newly-appeared events → insert them → broadcast (see §6.3).
 
 ### 5.3 ⚠️ The latency reality (verify before promising an SLA)
 
-The free football-data.org tier is **10 requests/minute and delivers *delayed* scores** for the 12 free competitions; un-delayed live data is a paid add-on. So the match-page latency budget in PRD §8.2/§16 is bounded by **the provider's own delay plus our poll cadence**, not by our infra. On free tier this can be tens of seconds to minutes.
+**Updated 2026-09-19 for the real provider (OpenFootAPI) — see `provider-adapter.md` for full detail.** Starter tier gives real score/status/minute via `/v1/matches`, but the binding constraint is the **5,000 req/month quota**, not a per-minute cap — a 60s sweep-poll across a handful of competitions burns the whole month's quota in under a day, so cadence must be quota-aware (poll only competitions/dates with matches today), not just rate-aware. Real goal/card/sub events and lineups need the Developer tier ($14/mo); even there, OpenFootAPI's own docs describe SSE push as delivering events "within about a minute," not truly instantly — so the latency budget in PRD §8.2/§16 is bounded by **provider freshness (~seconds to ~1 minute even on push) plus our poll/consume cadence**, not by our infra, on either tier.
 
-Product consequence to flag now: **fans in the room will know about a goal (from the TV) before our event marker appears.** The chat will erupt with "GOAL!!!" seconds before the inline marker lands. That's not a bug we can engineer away on a polling+delayed feed — it's a reason to (a) budget for the paid livescores add-on before launch, or (b) evaluate a provider offering push/webhooks/SSE so events arrive on change instead of on poll. Either path is a config swap behind the adapter (§7).
+Product consequence to flag now: **fans in the room will know about a goal (from the TV) before our event marker appears.** The chat will erupt with "GOAL!!!" seconds before the inline marker lands. That's not a bug we can engineer away on this provider even on its paid tier — set honest latency expectations in UX copy rather than promising near-real-time event markers. Whether we're on Starter (simulated events for MVP, per `provider-adapter.md`) or Developer (real events, ~1-min freshness) is a config swap behind the adapter (§7).
 
 ---
 
@@ -349,6 +392,15 @@ Worked example: a marquee room with **2,000 concurrent viewers** and just **5 me
 - A stable mapping table (`provider_ref` columns) links external IDs to ours, so re-mapping on a provider swap is a data task, not a schema change.
 - This is what makes the free-tier→paid-tier→different-provider path (PRD §11, and the latency fix in §5.3) a **configuration change**. Guard it with contract tests against recorded provider fixtures so a provider swap can be validated offline.
 
+### 7.1 Current provider: our own mock API, same contract as OpenFootAPI (decided 2026-09-19)
+
+Per `decisions.md` ("Data provider for MVP: self-built mock API"), the worker/adapter does **not** call `openfootapi.com` for MVP build. Instead:
+
+- Build a mock data service (own Next.js route group or small standalone service) that speaks OpenFootAPI's **exact documented contract** — same endpoint paths, request params, response field shapes, `meta.access` quota block, and error shapes (`plan_upgrade_required`, etc.) as verified in `provider-adapter.md`.
+- It backs onto **scripted match scenarios** (a timed sequence of score/minute/event changes for a "live" match) instead of a real upstream fetch — this replaces the ad-hoc static fixtures currently in `packages/mock-data` with something that actually behaves like a live-ticking match over time, which is what the chat/event-marker/prediction UI needs to be built and demoed against.
+- The adapter's base URL is a config value (env var), pointed at this mock service now and at `https://openfootapi.com` later — that swap should require zero code changes in the adapter itself, which is the whole point of building to the contract rather than to convenience.
+- Contract tests (mentioned above) should run against **both** recorded real-OpenFootAPI fixtures and our mock service's responses, so drift between them is caught immediately rather than discovered when we eventually flip to the real API.
+
 ---
 
 ## 8. Moderation (in the write path from day one — PRD §8.6)
@@ -391,8 +443,8 @@ Most **reads** are direct Supabase client queries from the browser, constrained 
 - `sendMessage` (validation + moderation + persist + broadcast), `addReaction`
 - `logMatch` (upsert into `match_logs`), `rateMatch`
 - `reportContent`, `muteUser`
-- Phase 2: `submitPrediction` (rejects writes after `kickoff_at`)
-- Worker-only (service role, not exposed): match/event upserts, broadcast of event markers.
+- MVP (updated 2026-09-19, was Phase 2): `submitPrediction` (rejects writes after `kickoff_at`), `submitFlashPick` (rejects writes after `window_end`)
+- Worker-only (service role, not exposed): match/event upserts, broadcast of event markers, resolving `flash_picks.resolved_option`.
 
 ---
 
@@ -423,7 +475,7 @@ Aligned to the org's production practices (feature branches, review, CI, staging
 - **Connection pooling:** front Postgres with **Supavisor in transaction mode** so bursts of serverless invocations don't exhaust DB connections.
 - **Cache the hot reads:** the live-matches list is identical for every viewer — cache it (short TTL) so one provider poll serves the whole audience; this is what keeps provider limits per-app (PRD §11).
 - **Realtime is the first thing to break, not the DB.** Watch the §6.3 fan-out ceiling before worrying about Postgres.
-- **Cost checkpoints to verify at decision time:** football-data.org paid/live add-on vs. an alternative provider with push/webhooks; Supabase Pro (and whether a spend cap is acceptable given it caps realtime throughput); the worker host. Don't take the numbers in this doc as current.
+- **Cost checkpoints to verify at decision time:** OpenFootAPI Starter vs. Developer ($14/mo, mainly for quota headroom and real events/lineups per §5.2/§5.3); Supabase Pro (and whether a spend cap is acceptable given it caps realtime throughput); the worker host. Don't take the numbers in this doc as current.
 
 ---
 
@@ -432,10 +484,11 @@ Aligned to the org's production practices (feature branches, review, CI, staging
 These block or reshape the build and should be decided deliberately, not by whoever writes the first migration. The first two are downstream of PRD §12's cold-start decision.
 
 1. **Ingestion worker host** — adds a component beyond "Vercel + Supabase." Recommend a small always-on worker (§5). *Approve the added service and its platform.*
-2. **Realtime approach vs. launch motion** — Supabase Realtime (Pro) is fine for a **single-club** launch; a **marquee-event** launch likely forces posting rate-limits + a dedicated broadcast layer for mega-rooms from day one (§6.3). *This is the same decision as PRD §12.1 wearing an engineering hat — decide together.*
-3. **Data provider / latency tier** — the free tier delivers **delayed** scores (§5.3). Decide between the paid livescores add-on and a push/webhook-capable provider *before* setting any latency expectation in `user-flows.md`.
+2. **Realtime approach vs. launch motion** — Supabase Realtime (Pro) is fine for a **single-club** launch; a **marquee-event** launch likely forces posting rate-limits + a dedicated broadcast layer for mega-rooms from day one (§6.3). *This is the same decision as PRD §12.1 wearing an engineering hat — decide together.* **Updated 2026-09-19:** fan-out is now per `(stand, match)` room, not per match (§4), which likely *reduces* single-room worst-case concurrency vs. the original one-room-per-match model — re-check §6.3's math once real Stand-size data exists, but don't assume it fully cancels out the marquee-event risk.
+3. **Data provider / latency tier** — OpenFootAPI Starter is quota-limited (5,000 req/mo, the binding constraint, not a per-minute cap) and gates real events/lineups/SSE behind Developer ($14/mo); even Developer's SSE claims only ~1-minute freshness (§5.3, `provider-adapter.md`). Decide whether to budget for Developer before setting any latency expectation in `user-flows.md`.
 4. **Message delivery pattern** — broadcast-from-database trigger vs. app-level dual-write (persist + broadcast). Recommend app-level for explicit moderation control; confirm.
 5. **Environment topology** — separate staging/prod Supabase projects vs. Supabase branching, and the region (put DB + worker + realtime in the same region as the launch audience to cut latency).
+6. **Stands & private-room access control** — private Stand membership (invite/accept flow) and the RLS policy gating `chat_rooms`/`messages` by `stand_members` (§4) need a concrete design before M4 (§16) — this is new scope added 2026-09-19 that the original build sequence didn't account for.
 
 ---
 
@@ -455,20 +508,23 @@ These block or reshape the build and should be decided deliberately, not by whoe
 
 ## 16. Suggested build sequence (MVP)
 
+> **Updated 2026-09-19:** inserts the mock data service (§7.1), Stands (§4), and Predict (PRD §8.7) into the sequence — all newly in-scope.
+
 1. **M0 — Foundations:** repo, Supabase projects (staging/prod), CI, auth, `profiles` + mandatory club selection, RLS baseline + policy tests.
-2. **M1 — Reference data + adapter:** competitions/clubs/teams seed; adapter with contract tests against recorded fixtures.
-3. **M2 — Ingestion worker:** poll loop, idempotent event ingest, match-state upserts (no realtime yet).
-4. **M3 — Match pages:** discovery list, match page with Stats/Lineups tabs from stored data.
-5. **M4 — Live room:** Broadcast channel, send path with validation + moderation hooks, event markers interleaved, participant count.
-6. **M5 — Community feed + match log:** posts/comments/likes/follows; one-tap watched + rating.
-7. **M6 — Hardening:** rate limits, report/mute end-to-end, observability, load test the §6.3 fan-out against the chosen launch motion, security review.
+2. **M1 — Mock data service + adapter:** build the mock API matching OpenFootAPI's contract (§7.1) backed by scripted match scenarios; competitions/clubs/teams seed; adapter with contract tests against both the mock service and recorded real-OpenFootAPI fixtures.
+3. **M2 — Ingestion worker:** poll loop (against the mock service for now), idempotent event ingest, match-state upserts (no realtime yet).
+4. **M3 — Match pages + Stands:** discovery list, Stands directory/switcher (join public, request/accept private), match page with Stats/Lineups tabs from stored data.
+5. **M4 — Live room:** per-`(stand, match)` Broadcast channel, send path with validation + moderation hooks, event markers interleaved, participant count, ephemeral chat cleanup.
+6. **M5 — Predict:** pre-match pick write path (`submitPrediction`, locked at kickoff) + flash-pick widget scoped per `(stand, match)` room with live % breakdown; standalone Predict tab.
+7. **M6 — Community feed + match log:** posts/comments/likes/follows; one-tap watched + rating.
+8. **M7 — Hardening:** rate limits, report/mute end-to-end, observability, load test the §6.3 fan-out against the chosen launch motion, security review.
 
 ---
 
 ## 17. Assumptions & things to verify before building
 
-- Vendor limits and prices in this doc (Supabase Realtime caps, football-data.org tiers/add-ons) are **as-researched and must be re-verified at decision time.**
-- The free provider tier's **delayed** scores are assumed acceptable only for prototyping, not launch.
-- MVP is assumed to be a **single global room per match** (PRD §12.2 recommendation); richer room taxonomy is explicitly out of scope here.
-- Predictions are Phase 2; the `predictions` table is defined only for forward-compatibility.
+- Vendor limits and prices in this doc (Supabase Realtime caps, OpenFootAPI tiers/quota) are **as-researched and must be re-verified at decision time.**
+- The Starter provider tier's real events/lineups/SSE gate (see `provider-adapter.md`) is assumed acceptable only for prototyping, not launch — and even Developer's SSE stream only claims ~1-minute freshness, not sub-second.
+- **Updated 2026-09-19:** MVP is no longer a single global room per match — see §4's `stands`/`chat_rooms` model and `decisions.md` ("Room taxonomy: Stands replace the single global room"). Every `(stand, match)` pair is its own chat room; the fan-out math in §6.3 now applies per room, not per match, so a popular match spread across many Stands has its concurrency spread across rooms rather than concentrated in one — worth re-checking whether this changes the §6.3 mega-room risk once real usage data exists.
+- **Updated 2026-09-19:** Predictions are confirmed in MVP, not Phase 2 — see `decisions.md` ("Predictions: pulled into MVP") and PRD §8.7. §4 now has `flash_picks`/`flash_pick_votes` alongside `predictions`; both need real write paths (`submitPrediction`, `submitFlashPick`) built in M5 (§16), not deferred.
 - Next.js + Supabase is inherited from the PRD as the current recommendation and should be **re-confirmed once §14/PRD-§12 are resolved**, since a marquee-event launch with spiky concurrency could justify a different realtime substrate.
