@@ -1,0 +1,60 @@
+import type { Club } from "../types";
+
+export const clubs: Club[] = [
+  {
+    id: "club-ars",
+    competitionId: "comp-pl",
+    name: "Arsenal",
+    shortName: "ARS",
+    primaryColor: "#EF0107",
+    secondaryColor: "#FFFFFF",
+  },
+  {
+    id: "club-mci",
+    competitionId: "comp-pl",
+    name: "Manchester City",
+    shortName: "MCI",
+    primaryColor: "#6CABDD",
+    secondaryColor: "#1C2C5B",
+  },
+  {
+    id: "club-liv",
+    competitionId: "comp-pl",
+    name: "Liverpool",
+    shortName: "LIV",
+    primaryColor: "#C8102E",
+    secondaryColor: "#F6EB61",
+  },
+  {
+    id: "club-mun",
+    competitionId: "comp-pl",
+    name: "Manchester United",
+    shortName: "MUN",
+    primaryColor: "#DA291C",
+    secondaryColor: "#FBE122",
+  },
+  {
+    id: "club-rma",
+    competitionId: "comp-laliga",
+    name: "Real Madrid",
+    shortName: "RMA",
+    primaryColor: "#FEBE10",
+    secondaryColor: "#00529F",
+  },
+  {
+    id: "club-fcb",
+    competitionId: "comp-laliga",
+    name: "Barcelona",
+    shortName: "FCB",
+    primaryColor: "#A50044",
+    secondaryColor: "#004D98",
+  },
+  {
+    id: "club-atm",
+    competitionId: "comp-laliga",
+    name: "Atletico Madrid",
+    shortName: "ATM",
+    primaryColor: "#CB3524",
+    secondaryColor: "#FFFFFF",
+  },
+];
