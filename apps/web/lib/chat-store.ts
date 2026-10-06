@@ -1,39 +1,27 @@
 import type { ChatMessage } from "@football-mafia/mock-data";
+import { kv } from "@/lib/kv";
 
-type StandEvent = { kind: "message"; message: ChatMessage } | { kind: "cleared" };
-type Subscriber = (event: StandEvent) => void;
+function key(standId: string) {
+  return `chat:${standId}`;
+}
 
 /**
- * In-memory, per-server-process message store keyed by stand id. Swappable
- * for a real DB later — every call site here is already async-shaped where
- * it matters (the route handlers), so the storage itself is the only thing
- * that would need to change.
+ * Shared message history for a stand, stored in `kv` so every serverless
+ * instance (and every device polling it) sees the same chat. Delivery is by
+ * polling (see ChatTab) rather than push, since an in-memory SSE subscriber
+ * list can't fan out across instances either.
  */
-const messagesByStand = new Map<string, ChatMessage[]>();
-const subscribersByStand = new Map<string, Set<Subscriber>>();
-
-export function getStandMessages(standId: string): ChatMessage[] {
-  return messagesByStand.get(standId) ?? [];
+export async function getStandMessages(standId: string): Promise<ChatMessage[]> {
+  return (await kv.get<ChatMessage[]>(key(standId))) ?? [];
 }
 
-export function addStandMessage(standId: string, message: ChatMessage) {
-  const list = messagesByStand.get(standId) ?? [];
+export async function addStandMessage(standId: string, message: ChatMessage) {
+  const list = await getStandMessages(standId);
   list.push(message);
-  messagesByStand.set(standId, list);
-  subscribersByStand
-    .get(standId)
-    ?.forEach((notify) => notify({ kind: "message", message }));
+  await kv.set(key(standId), list);
 }
 
-/** Testing-only: wipes a stand's chat history and tells connected tabs to clear their view. */
-export function clearStandMessages(standId: string) {
-  messagesByStand.delete(standId);
-  subscribersByStand.get(standId)?.forEach((notify) => notify({ kind: "cleared" }));
-}
-
-export function subscribeToStand(standId: string, notify: Subscriber): () => void {
-  const subs = subscribersByStand.get(standId) ?? new Set<Subscriber>();
-  subs.add(notify);
-  subscribersByStand.set(standId, subs);
-  return () => subs.delete(notify);
+/** Testing-only: wipes a stand's chat history so you can start a fresh test run. */
+export async function clearStandMessages(standId: string) {
+  await kv.del(key(standId));
 }

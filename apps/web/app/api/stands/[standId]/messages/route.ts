@@ -2,13 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import type { ChatMessage } from "@football-mafia/mock-data";
 import { addStandMessage, clearStandMessages, getStandMessages } from "@/lib/chat-store";
 
-/** Real chat messages sent by mock users in this stand, for this server process's lifetime. */
+export const dynamic = "force-dynamic";
+
+/** Real chat messages for this stand, shared across every client. */
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ standId: string }> },
 ) {
   const { standId } = await params;
-  return NextResponse.json(getStandMessages(standId));
+  return NextResponse.json(await getStandMessages(standId), {
+    headers: { "Cache-Control": "no-store" },
+  });
 }
 
 export async function POST(
@@ -42,7 +46,7 @@ export async function POST(
     body: text.trim(),
   };
 
-  addStandMessage(standId, message);
+  await addStandMessage(standId, message);
   return NextResponse.json(message, { status: 201 });
 }
 
@@ -52,6 +56,6 @@ export async function DELETE(
   { params }: { params: Promise<{ standId: string }> },
 ) {
   const { standId } = await params;
-  clearStandMessages(standId);
+  await clearStandMessages(standId);
   return NextResponse.json({ ok: true });
 }

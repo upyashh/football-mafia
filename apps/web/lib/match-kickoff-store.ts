@@ -1,23 +1,26 @@
-const kickoffByMatch = new Map<string, string>();
+import { kv } from "@/lib/kv";
+
+function key(matchId: string) {
+  return `kickoff:${matchId}`;
+}
 
 /**
- * In-memory, per-server-process kickoff anchor for a simulated live match —
- * shared by every client that asks, so two browsers (or devices) watching
- * the same match compute the same elapsed minute instead of each starting
- * their own clock. Swappable for a real DB later, same as chat-store.
+ * Shared kickoff anchor for a simulated live match, stored in `kv` so every
+ * serverless instance (and every browser/device) agrees on the same elapsed
+ * minute instead of each one inventing its own "now" the first time it's asked.
  */
-export function getMatchKickoff(matchId: string): string {
-  let kickoff = kickoffByMatch.get(matchId);
-  if (!kickoff) {
-    kickoff = new Date().toISOString();
-    kickoffByMatch.set(matchId, kickoff);
-  }
+export async function getMatchKickoff(matchId: string): Promise<string> {
+  const existing = await kv.get<string>(key(matchId));
+  if (existing) return existing;
+
+  const kickoff = new Date().toISOString();
+  await kv.set(key(matchId), kickoff);
   return kickoff;
 }
 
 /** Testing-only: restarts a match's shared clock from now, for every client. */
-export function resetMatchKickoff(matchId: string): string {
+export async function resetMatchKickoff(matchId: string): Promise<string> {
   const kickoff = new Date().toISOString();
-  kickoffByMatch.set(matchId, kickoff);
+  await kv.set(key(matchId), kickoff);
   return kickoff;
 }
