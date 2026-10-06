@@ -64,35 +64,31 @@ export function ChatTab({
   >({});
   const streamRef = useRef<HTMLDivElement>(null);
 
-  // Real messages for this stand: an initial fetch of what's already on the
-  // server, then an SSE subscription for anything sent after we connect —
-  // by anyone, in any tab/browser hitting the same dev server.
+  // Real messages for this stand: poll the shared server store so every
+  // device/browser watching this stand converges on the same chat history
+  // (push via SSE can't fan out across Vercel's independent serverless
+  // instances, so polling is what actually stays consistent in production).
   useEffect(() => {
     let active = true;
-    fetch(`/api/stands/${selectedStandId}/messages`)
-      .then((res) => res.json())
-      .then((initial: ChatMessage[]) => {
-        if (!active) return;
-        setMessagesByStand((prev) => ({ ...prev, [selectedStandId]: initial }));
-      })
-      .catch(() => {});
 
-    const source = new EventSource(`/api/stands/${selectedStandId}/stream`);
-    source.onmessage = (event) => {
-      const message = JSON.parse(event.data) as ChatMessage;
-      setMessagesByStand((prev) => {
-        const existing = prev[selectedStandId] ?? [];
-        if (existing.some((m) => m.id === message.id)) return prev;
-        return { ...prev, [selectedStandId]: [...existing, message] };
-      });
-    };
-    source.addEventListener("cleared", () => {
-      setMessagesByStand((prev) => ({ ...prev, [selectedStandId]: [] }));
-    });
+    async function refresh() {
+      try {
+        const res = await fetch(`/api/stands/${selectedStandId}/messages`, {
+          cache: "no-store",
+        });
+        if (!res.ok || !active) return;
+        const latest: ChatMessage[] = await res.json();
+        setMessagesByStand((prev) => ({ ...prev, [selectedStandId]: latest }));
+      } catch {
+        // Offline or server hiccup — keep showing what we already have.
+      }
+    }
 
+    refresh();
+    const interval = setInterval(refresh, 2500);
     return () => {
       active = false;
-      source.close();
+      clearInterval(interval);
     };
   }, [selectedStandId]);
 

@@ -10,7 +10,7 @@ export async function GET(
 ) {
   const { id } = await params;
   return NextResponse.json(
-    { kickoffAt: getMatchKickoff(id) },
+    { kickoffAt: await getMatchKickoff(id) },
     { headers: { "Cache-Control": "no-store" } },
   );
 }
@@ -21,5 +21,5 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  return NextResponse.json({ kickoffAt: resetMatchKickoff(id) });
+  return NextResponse.json({ kickoffAt: await resetMatchKickoff(id) });
 }
