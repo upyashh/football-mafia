@@ -2,7 +2,7 @@
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-export type MatchTab = "events" | "stats" | "lineups" | "chat";
+export type MatchTab = "events" | "stats" | "lineups" | "stands";
 
 export function MatchTabBar({
   value,
@@ -27,8 +27,8 @@ export function MatchTabBar({
         <TabsTrigger value="lineups" className="flex-1">
           Lineups
         </TabsTrigger>
-        <TabsTrigger value="chat" className="flex-1">
-          Chat
+        <TabsTrigger value="stands" className="flex-1">
+          Stands
         </TabsTrigger>
       </TabsList>
     </Tabs>

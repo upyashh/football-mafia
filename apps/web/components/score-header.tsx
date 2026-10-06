@@ -30,6 +30,7 @@ export function ScoreHeader({
         <Button
           variant="ghost"
           size="sm"
+          className="text-text-primary hover:text-text-primary"
           nativeButton={false}
           render={<Link href="/feed" />}
         >

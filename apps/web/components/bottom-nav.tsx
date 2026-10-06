@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, ListOrdered, User } from "lucide-react";
+import { Home, ListOrdered, User, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const ITEMS = [
   { href: "/feed", label: "Home", icon: Home },
+  { href: "/stands", label: "Stands", icon: Users },
   { href: "/matches", label: "Matches", icon: ListOrdered },
   { href: "/profile", label: "Profile", icon: User },
 ] as const;
@@ -25,7 +26,7 @@ export function BottomNav() {
             className={cn(
               "flex flex-1 flex-col items-center gap-0.5 rounded-lg py-2 text-xs font-medium transition-colors",
               active
-                ? "bg-club-accent/10 text-club-accent"
+                ? "bg-event-goal/10 text-event-goal"
                 : "text-text-secondary hover:text-text-primary",
             )}
           >
