@@ -52,3 +52,16 @@ export const matches: Match[] = [
     awayScore: 1,
   },
 ];
+
+export const upcomingMatches: Match[] = [
+  {
+    id: "match-liv-mci-upcoming",
+    competitionId: "comp-pl",
+    homeTeamId: "team-liv",
+    awayTeamId: "team-mci",
+    kickoffAt: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+    status: "SCHEDULED",
+    homeScore: 0,
+    awayScore: 0,
+  },
+];

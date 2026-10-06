@@ -50,6 +50,7 @@ export default function ProfilePage() {
         <Button
           variant="outline"
           size="sm"
+          className="text-text-primary hover:text-text-primary"
           onClick={() => {
             resetOnboarding();
             router.replace("/onboarding");

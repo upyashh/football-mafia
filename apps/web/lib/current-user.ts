@@ -1,34 +1,75 @@
-import { currentUser } from "@football-mafia/mock-data";
+import { currentUser as defaultUser } from "@football-mafia/mock-data";
 
-const STORAGE_KEY = "ff-selected-club-id";
+const SESSION_KEY = "ff-session-user";
 const listeners = new Set<() => void>();
 
+type SessionUser = { id: string; username: string; clubId: string };
+
+function randomSuffix() {
+  return Math.random().toString(36).slice(2, 6);
+}
+
+/** A fresh, never-seen-before mock identity — one per browser tab. */
+function createIdentity(): SessionUser {
+  const suffix = randomSuffix();
+  return {
+    id: `user-${suffix}`,
+    username: `fan_${suffix}`,
+    clubId: defaultUser.clubId,
+  };
+}
+
+function readSessionUser(): SessionUser | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.sessionStorage.getItem(SESSION_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as SessionUser;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionUser(user: SessionUser) {
+  window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(user));
+}
+
 /**
- * The prototype has one mock "signed in" user (see @football-mafia/mock-data).
- * Onboarding's club picker doesn't create a new identity — it just changes
- * which club that mock user is affiliated with, stored client-side so the
- * accent/feed react immediately without a backend.
+ * The prototype's mock "signed in" user, scoped to `sessionStorage` instead
+ * of `localStorage` — each browser tab gets its own generated identity, so
+ * opening the app in two tabs is enough to test real-time chat as two
+ * different mock users locally, without a real auth backend.
  */
+export function getSessionUser(): SessionUser {
+  if (typeof window === "undefined") return { ...defaultUser };
+  const existing = readSessionUser();
+  if (existing) return existing;
+  const created = createIdentity();
+  writeSessionUser(created);
+  return created;
+}
+
 export function getSelectedClubId(): string {
-  if (typeof window === "undefined") return currentUser.clubId;
-  return window.localStorage.getItem(STORAGE_KEY) ?? currentUser.clubId;
+  if (typeof window === "undefined") return defaultUser.clubId;
+  return getSessionUser().clubId;
 }
 
 export function setSelectedClubId(clubId: string) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, clubId);
+  const user = getSessionUser();
+  writeSessionUser({ ...user, clubId });
   listeners.forEach((listener) => listener());
 }
 
 export function hasOnboarded(): boolean {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(STORAGE_KEY) !== null;
+  return readSessionUser() !== null;
 }
 
-/** Clears the mock user's club choice so onboarding shows again from scratch. */
+/** Clears this tab's mock identity so onboarding shows again from scratch. */
 export function resetOnboarding() {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(STORAGE_KEY);
+  window.sessionStorage.removeItem(SESSION_KEY);
   listeners.forEach((listener) => listener());
 }
 
@@ -38,5 +79,5 @@ export function subscribeToClubChange(listener: () => void): () => void {
 }
 
 export function getCurrentUsername(): string {
-  return currentUser.username;
+  return getSessionUser().username;
 }
