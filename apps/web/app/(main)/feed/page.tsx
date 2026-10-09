@@ -1,41 +1,68 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Shuffle } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import {
   getClubForTeamId,
   getCompetitions,
-  getFeedPosts,
   getLiveMatches,
   getPastMatches,
+  getUpcomingHypeMatches,
   type Competition,
-  type FeedPost as FeedPostType,
+  type HypeMatchPreview,
   type Match,
 } from "@football-mafia/mock-data";
 import { useSelectedClub } from "@/lib/use-selected-club";
+import { useStands } from "@/lib/use-stands";
 import { FixtureCard } from "@/components/fixture-card";
-import { LiveFixtureCard } from "@/components/live-fixture-card";
-import { FeedPost } from "@/components/feed-post";
 import { ClubBadge } from "@/components/club-badge";
+import { FeaturedLiveCard } from "@/components/featured-live-card";
+import { CompactLiveRow } from "@/components/compact-live-row";
+import { HypeMatchCard } from "@/components/hype-match-card";
+import { TerracePreviewCard } from "@/components/terrace-preview-card";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+type FilterTab = "live" | "following" | string;
 
 export default function FeedPage() {
   const { club } = useSelectedClub();
-  const [matches, setMatches] = useState<Match[]>([]);
+  const { yourStands, discoverStands, toggleJoin } = useStands();
+  const [pastMatches, setPastMatches] = useState<Match[]>([]);
   const [liveMatches, setLiveMatches] = useState<Match[]>([]);
   const [competitions, setCompetitions] = useState<Competition[]>([]);
-  const [posts, setPosts] = useState<FeedPostType[]>([]);
+  const [hypeMatches, setHypeMatches] = useState<HypeMatchPreview[]>([]);
+  const [tab, setTab] = useState<FilterTab>("live");
 
   useEffect(() => {
-    getPastMatches().then(setMatches);
+    getPastMatches().then(setPastMatches);
     getLiveMatches().then(setLiveMatches);
     getCompetitions().then(setCompetitions);
+    getUpcomingHypeMatches().then(setHypeMatches);
   }, []);
 
-  useEffect(() => {
-    getFeedPosts(club.id).then(setPosts);
-  }, [club.id]);
+  const trendingStands = useMemo(
+    () => [...discoverStands].sort((a, b) => b.activeCount - a.activeCount),
+    [discoverStands],
+  );
+
+  const followingLiveMatches = useMemo(
+    () =>
+      liveMatches.filter(
+        (match) => match.homeTeamId === club.id || match.awayTeamId === club.id,
+      ),
+    [liveMatches, club.id],
+  );
+
+  const visibleLiveMatches =
+    tab === "live"
+      ? liveMatches
+      : tab === "following"
+        ? followingLiveMatches
+        : liveMatches.filter((match) => match.competitionId === tab);
+
+  const [featuredMatch, ...restLiveMatches] = visibleLiveMatches;
 
   return (
     <div className="flex flex-col gap-4 pb-4">
@@ -48,32 +75,88 @@ export default function FeedPage() {
         </div>
         <Button
           variant="ghost"
-          size="sm"
+          size="icon-sm"
           nativeButton={false}
           render={<Link href="/onboarding" />}
         >
-          <Shuffle />
-          Switch club
+          <Settings2 />
         </Button>
       </header>
 
-      {liveMatches.length > 0 && (
-        <section className="flex flex-col gap-2 pt-3">
-          <h2 className="px-4 text-xs font-semibold tracking-wide text-live-accent uppercase">
-            Live now
+      <div className="px-4">
+        <Tabs value={tab} onValueChange={(value) => setTab(value as FilterTab)} className="w-full">
+          <TabsList className="w-full bg-surface-card ring-1 ring-border-subtle">
+            <TabsTrigger value="live">Live ({liveMatches.length})</TabsTrigger>
+            <TabsTrigger value="following">Following</TabsTrigger>
+            {competitions[0] && (
+              <TabsTrigger value={competitions[0].id}>
+                {competitions[0].name}
+              </TabsTrigger>
+            )}
+          </TabsList>
+        </Tabs>
+      </div>
+
+      {featuredMatch &&
+        (() => {
+          const competition = competitions.find(
+            (c) => c.id === featuredMatch.competitionId,
+          );
+          const homeClub = getClubForTeamId(featuredMatch.homeTeamId);
+          const awayClub = getClubForTeamId(featuredMatch.awayTeamId);
+          if (!competition || !homeClub || !awayClub) return null;
+          return (
+            <section className="px-4">
+              <FeaturedLiveCard
+                match={featuredMatch}
+                competition={competition}
+                homeClub={homeClub}
+                awayClub={awayClub}
+                userStands={yourStands}
+              />
+            </section>
+          );
+        })()}
+
+      {restLiveMatches.length > 0 && (
+        <section className="flex flex-col gap-2 px-4">
+          {restLiveMatches.map((match) => {
+            const competition = competitions.find(
+              (c) => c.id === match.competitionId,
+            );
+            const homeClub = getClubForTeamId(match.homeTeamId);
+            const awayClub = getClubForTeamId(match.awayTeamId);
+            if (!competition || !homeClub || !awayClub) return null;
+            return (
+              <CompactLiveRow
+                key={match.id}
+                match={match}
+                competition={competition}
+                homeClub={homeClub}
+                awayClub={awayClub}
+              />
+            );
+          })}
+        </section>
+      )}
+
+      {hypeMatches.length > 0 && (
+        <section className="flex flex-col gap-2 pt-1">
+          <h2 className="px-4 text-xs font-semibold tracking-wide text-text-secondary uppercase">
+            Coming up
           </h2>
-          <div className="flex gap-3 overflow-x-auto px-4 pb-1">
-            {liveMatches.map((match) => {
+          <div className="flex flex-col gap-2 px-4">
+            {hypeMatches.map((preview) => {
               const competition = competitions.find(
-                (c) => c.id === match.competitionId,
+                (c) => c.id === preview.match.competitionId,
               );
-              const homeClub = getClubForTeamId(match.homeTeamId);
-              const awayClub = getClubForTeamId(match.awayTeamId);
+              const homeClub = getClubForTeamId(preview.match.homeTeamId);
+              const awayClub = getClubForTeamId(preview.match.awayTeamId);
               if (!competition || !homeClub || !awayClub) return null;
               return (
-                <LiveFixtureCard
-                  key={match.id}
-                  match={match}
+                <HypeMatchCard
+                  key={preview.match.id}
+                  preview={preview}
                   competition={competition}
                   homeClub={homeClub}
                   awayClub={awayClub}
@@ -84,12 +167,29 @@ export default function FeedPage() {
         </section>
       )}
 
-      <section className="flex flex-col gap-2 pt-3">
+      {trendingStands.length > 0 && (
+        <section className="flex flex-col gap-2 pt-1">
+          <h2 className="px-4 text-xs font-semibold tracking-wide text-text-secondary uppercase">
+            Trending terraces
+          </h2>
+          <div className="flex gap-3 overflow-x-auto px-4 pb-1">
+            {trendingStands.map((stand) => (
+              <TerracePreviewCard
+                key={stand.id}
+                stand={stand}
+                onToggleJoin={() => toggleJoin(stand.id)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="flex flex-col gap-2 pt-1">
         <h2 className="px-4 text-xs font-semibold tracking-wide text-text-secondary uppercase">
           Recent results
         </h2>
         <div className="flex gap-3 overflow-x-auto px-4 pb-1">
-          {matches.map((match) => {
+          {pastMatches.map((match) => {
             const competition = competitions.find(
               (c) => c.id === match.competitionId,
             );
@@ -107,20 +207,6 @@ export default function FeedPage() {
             );
           })}
         </div>
-      </section>
-
-      <section className="flex flex-col">
-        <h2 className="px-4 pb-2 text-xs font-semibold tracking-wide text-text-secondary uppercase">
-          {club.name} community
-        </h2>
-        {posts.length === 0 && (
-          <p className="px-4 py-6 text-center text-sm text-text-secondary">
-            No posts yet for {club.name}.
-          </p>
-        )}
-        {posts.map((post) => (
-          <FeedPost key={post.id} post={post} />
-        ))}
       </section>
     </div>
   );

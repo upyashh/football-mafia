@@ -2,24 +2,19 @@
 
 import { use, useEffect, useMemo, useState } from "react";
 import {
-  clubs,
-  getChatMessages,
   getClubForTeamId,
   getCompetitions,
-  getCurrentUser,
   getLineups,
   getMatchById,
   getMatchEvents,
   getMatchStats,
   getPlayersByIds,
-  type ChatMessage,
   type Competition,
   type Lineup,
   type Match,
   type MatchEvent,
   type MatchStats,
   type Player,
-  type User,
 } from "@football-mafia/mock-data";
 import { useLiveMatch } from "@/lib/use-live-match";
 import { ScoreHeader } from "@/components/score-header";
@@ -27,7 +22,7 @@ import { MatchTabBar, type MatchTab } from "@/components/match-tab-bar";
 import { StatsTab } from "@/components/stats-tab";
 import { LineupsTab } from "@/components/lineups-tab";
 import { EventsTab } from "@/components/events-tab";
-import { ChatTab } from "@/components/chat-tab";
+import { MatchStandsTab } from "@/components/match-stands-tab";
 
 type MatchPageData = {
   match: Match;
@@ -37,8 +32,6 @@ type MatchPageData = {
   awayLineup: Lineup | null;
   players: Player[];
   events: MatchEvent[];
-  chatMessages: ChatMessage[];
-  currentUser: User;
 };
 
 export default function MatchPage({
@@ -63,15 +56,12 @@ export default function MatchPage({
         return;
       }
 
-      const [competitions, stats, lineups, events, chatMessages, currentUser] =
-        await Promise.all([
-          getCompetitions(),
-          getMatchStats(match.id),
-          getLineups(match.id),
-          getMatchEvents(match.id),
-          getChatMessages(match.id),
-          getCurrentUser(),
-        ]);
+      const [competitions, stats, lineups, events] = await Promise.all([
+        getCompetitions(),
+        getMatchStats(match.id),
+        getLineups(match.id),
+        getMatchEvents(match.id),
+      ]);
 
       const competition = competitions.find(
         (c) => c.id === match.competitionId,
@@ -95,8 +85,6 @@ export default function MatchPage({
         awayLineup,
         players,
         events,
-        chatMessages,
-        currentUser,
       });
     }
 
@@ -119,11 +107,10 @@ export default function MatchPage({
   }, [data, live]);
 
   const events = live ? live.events : data?.events ?? [];
-  const chatMessages = live ? live.messages : data?.chatMessages ?? [];
   const isLiveOrPaused = match?.status === "LIVE" || match?.status === "PAUSED";
 
-  // Default tab: Events while the match is live/paused, Stats otherwise —
-  // only applied once, before the user has picked a tab themselves.
+  // Default tab: Events while live/paused, Stats otherwise. Only applied
+  // once, before the user has picked a tab themselves.
   useEffect(() => {
     if (tab !== null || !match) return;
     setTab(isLiveOrPaused ? "events" : "stats");
@@ -144,7 +131,7 @@ export default function MatchPage({
   if (!homeClub || !awayClub) return null;
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-md flex-col bg-surface-page">
+    <div className="mx-auto flex h-dvh w-full max-w-md flex-col overflow-hidden bg-surface-page">
       <ScoreHeader
         match={match}
         competition={competition}
@@ -153,40 +140,36 @@ export default function MatchPage({
       />
       <MatchTabBar value={tab} onValueChange={setTab} />
 
-      {tab === "events" && (
-        <EventsTab
-          events={events}
-          homeClub={homeClub}
-          awayClub={awayClub}
-          homeTeamId={match.homeTeamId}
-          awayTeamId={match.awayTeamId}
-        />
-      )}
-      {tab === "stats" && stats && (
-        <StatsTab stats={stats} homeClub={homeClub} awayClub={awayClub} />
-      )}
-      {tab === "lineups" && homeLineup && awayLineup && (
-        <LineupsTab
-          homeClub={homeClub}
-          awayClub={awayClub}
-          homeLineup={homeLineup}
-          awayLineup={awayLineup}
-          players={players}
-        />
-      )}
-      {tab === "chat" && (
-        <ChatTab
-          matchId={match.id}
-          messages={chatMessages}
-          events={events}
-          currentUser={data.currentUser}
-          homeClub={homeClub}
-          awayClub={awayClub}
-          homeTeamId={match.homeTeamId}
-          awayTeamId={match.awayTeamId}
-          getClubById={(clubId) => clubs.find((c) => c.id === clubId) ?? null}
-        />
-      )}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {tab === "events" && (
+          <div className="flex-1 overflow-y-auto">
+            <EventsTab
+              events={events}
+              homeClub={homeClub}
+              awayClub={awayClub}
+              homeTeamId={match.homeTeamId}
+              awayTeamId={match.awayTeamId}
+            />
+          </div>
+        )}
+        {tab === "stats" && stats && (
+          <div className="flex-1 overflow-y-auto">
+            <StatsTab stats={stats} homeClub={homeClub} awayClub={awayClub} />
+          </div>
+        )}
+        {tab === "lineups" && homeLineup && awayLineup && (
+          <div className="flex-1 overflow-y-auto">
+            <LineupsTab
+              homeClub={homeClub}
+              awayClub={awayClub}
+              homeLineup={homeLineup}
+              awayLineup={awayLineup}
+              players={players}
+            />
+          </div>
+        )}
+        {tab === "stands" && <MatchStandsTab matchId={match.id} />}
+      </div>
     </div>
   );
 }

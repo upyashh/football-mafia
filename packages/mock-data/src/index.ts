@@ -9,10 +9,12 @@ import { feedPosts } from "./fixtures/feedPosts";
 import { matchLogs } from "./fixtures/matchLogs";
 import { currentUser } from "./fixtures/users";
 import {
-  liveMatch,
-  liveMatchEvents,
-  liveMatchChatMessages,
+  allLiveScripts,
+  findLiveScript,
+  setLiveMatchKickoff,
 } from "./fixtures/liveMatch";
+import { stands } from "./fixtures/stands";
+import { hypeMatches } from "./fixtures/hypeMatches";
 import { resolveLiveMatchState } from "./live-match";
 
 export * from "./types";
@@ -24,6 +26,7 @@ export * from "./live-match";
 export { clubs } from "./fixtures/clubs";
 export { competitions } from "./fixtures/competitions";
 export { currentUser } from "./fixtures/users";
+export { setLiveMatchKickoff } from "./fixtures/liveMatch";
 
 /** Sync lookup: a match's homeTeamId/awayTeamId -> the Club that team represents. */
 export function getClubForTeamId(teamId: string) {
@@ -58,33 +61,33 @@ export async function getPastMatches() {
 }
 
 export async function getLiveMatches() {
-  return [liveMatch];
+  return allLiveScripts().map((script) => script.match);
 }
 
 export async function getMatchById(matchId: string) {
-  if (matchId === liveMatch.id) return liveMatch;
+  const script = findLiveScript(matchId);
+  if (script) return script.match;
   return matches.find((m) => m.id === matchId) ?? null;
 }
 
 export async function getMatchEvents(matchId: string) {
-  if (matchId === liveMatch.id) return liveMatchEvents;
-  return [];
+  return findLiveScript(matchId)?.events ?? [];
 }
 
 export async function getLiveMatchState(matchId: string) {
-  if (matchId !== liveMatch.id) return null;
+  const script = findLiveScript(matchId);
+  if (!script) return null;
   return resolveLiveMatchState(
-    liveMatch,
-    liveMatchEvents,
+    script.match,
+    script.events,
     new Date(),
-    liveMatchChatMessages,
+    script.chatMessages,
   );
 }
 
-/** Full scripted chat for the simulated live match — the live-match store reveals it by minute. */
+/** Full scripted chat for a simulated live match — the live-match store reveals it by minute. */
 export async function getChatMessages(matchId: string) {
-  if (matchId === liveMatch.id) return liveMatchChatMessages;
-  return [];
+  return findLiveScript(matchId)?.chatMessages ?? [];
 }
 
 export async function getMatchStats(matchId: string) {
@@ -118,4 +121,12 @@ export async function getMatchLogs(userId: string) {
 
 export async function getCurrentUser() {
   return currentUser;
+}
+
+export async function getAllStands() {
+  return stands;
+}
+
+export async function getUpcomingHypeMatches() {
+  return hypeMatches;
 }

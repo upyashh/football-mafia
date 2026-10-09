@@ -114,9 +114,29 @@ export type User = {
 export type ChatMessage = {
   id: string;
   matchId: string;
+  standId: string;
   minute: number;
   authorId: string;
   authorUsername: string;
   authorClubId: string;
   body: string;
+};
+
+export type StandVisibility = "public_global" | "public_community" | "private";
+
+export type Stand = {
+  id: string;
+  name: string;
+  visibility: StandVisibility;
+  description: string;
+  memberCount: number;
+  activeCount: number;
+  joined: boolean;
+};
+
+/** A scheduled match plus the community-level RSVP/pre-match-pick aggregate shown on Home. */
+export type HypeMatchPreview = {
+  match: Match;
+  rsvpCount: number;
+  predictionSplit: SideStat;
 };

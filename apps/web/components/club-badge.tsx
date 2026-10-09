@@ -26,7 +26,7 @@ export function ClubBadge({
           color: club.secondaryColor,
         }}
       >
-        {club.shortName}
+        {size === "sm" ? club.shortName.slice(0, 2) : club.shortName}
       </AvatarFallback>
     </Avatar>
   );
