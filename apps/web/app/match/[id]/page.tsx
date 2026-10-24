@@ -9,6 +9,7 @@ import {
   getMatchEvents,
   getMatchStats,
   getPlayersByIds,
+  type Club,
   type Competition,
   type Lineup,
   type Match,
@@ -27,11 +28,16 @@ import { MatchStandsTab } from "@/components/match-stands-tab";
 type MatchPageData = {
   match: Match;
   competition: Competition;
+  homeClub: Club;
+  awayClub: Club;
   stats: MatchStats | null;
   homeLineup: Lineup | null;
   awayLineup: Lineup | null;
   players: Player[];
   events: MatchEvent[];
+  /** Real top-5-league matches (OpenFootAPI-backed) have no events/stats/lineups
+   * data this round (Starter-tier scope note) — only Stands is shown for these. */
+  isRealFixture: boolean;
 };
 
 export default function MatchPage({
@@ -50,41 +56,69 @@ export default function MatchPage({
     let active = true;
 
     async function load() {
+      // Real OpenFootAPI fixtures use provider match refs ("match_..."),
+      // the mock-data scripted fixtures use "match-..." ids — try the mock
+      // fixture first since it's a cheap in-memory lookup, then fall back
+      // to the real-data route for everything else.
       const match = await getMatchById(id);
-      if (!match) {
-        if (active) setData(null);
+      if (match) {
+        const [competitions, stats, lineups, events] = await Promise.all([
+          getCompetitions(),
+          getMatchStats(match.id),
+          getLineups(match.id),
+          getMatchEvents(match.id),
+        ]);
+
+        const competition = competitions.find(
+          (c) => c.id === match.competitionId,
+        );
+        const homeLineup =
+          lineups.find((l) => l.teamId === match.homeTeamId) ?? null;
+        const awayLineup =
+          lineups.find((l) => l.teamId === match.awayTeamId) ?? null;
+
+        const playerIds = [homeLineup, awayLineup]
+          .filter((l): l is Lineup => l !== null)
+          .flatMap((l) => l.startingXI.map((entry) => entry.playerId));
+        const players = await getPlayersByIds(playerIds);
+
+        const homeClub = getClubForTeamId(match.homeTeamId);
+        const awayClub = getClubForTeamId(match.awayTeamId);
+
+        if (!active || !competition || !homeClub || !awayClub) return;
+        setData({
+          match,
+          competition,
+          homeClub,
+          awayClub,
+          stats,
+          homeLineup,
+          awayLineup,
+          players,
+          events,
+          isRealFixture: false,
+        });
         return;
       }
 
-      const [competitions, stats, lineups, events] = await Promise.all([
-        getCompetitions(),
-        getMatchStats(match.id),
-        getLineups(match.id),
-        getMatchEvents(match.id),
-      ]);
-
-      const competition = competitions.find(
-        (c) => c.id === match.competitionId,
-      );
-      const homeLineup =
-        lineups.find((l) => l.teamId === match.homeTeamId) ?? null;
-      const awayLineup =
-        lineups.find((l) => l.teamId === match.awayTeamId) ?? null;
-
-      const playerIds = [homeLineup, awayLineup]
-        .filter((l): l is Lineup => l !== null)
-        .flatMap((l) => l.startingXI.map((entry) => entry.playerId));
-      const players = await getPlayersByIds(playerIds);
-
-      if (!active || !competition) return;
+      const res = await fetch(`/api/matches/fixtures/${encodeURIComponent(id)}`);
+      if (!res.ok) {
+        if (active) setData(null);
+        return;
+      }
+      const fixture = await res.json();
+      if (!active) return;
       setData({
-        match,
-        competition,
-        stats,
-        homeLineup,
-        awayLineup,
-        players,
-        events,
+        match: fixture.match,
+        competition: fixture.competition,
+        homeClub: fixture.homeClub,
+        awayClub: fixture.awayClub,
+        stats: null,
+        homeLineup: null,
+        awayLineup: null,
+        players: [],
+        events: [],
+        isRealFixture: true,
       });
     }
 
@@ -109,12 +143,17 @@ export default function MatchPage({
   const events = live ? live.events : data?.events ?? [];
   const isLiveOrPaused = match?.status === "LIVE" || match?.status === "PAUSED";
 
-  // Default tab: Events while live/paused, Stats otherwise. Only applied
-  // once, before the user has picked a tab themselves.
+  // Default tab: Events while live/paused, Stats otherwise, Stands for real
+  // fixtures (no events/stats/lineups data this round — see MatchPageData).
+  // Only applied once, before the user has picked a tab themselves.
   useEffect(() => {
-    if (tab !== null || !match) return;
+    if (tab !== null || !match || !data) return;
+    if (data.isRealFixture) {
+      setTab("stands");
+      return;
+    }
     setTab(isLiveOrPaused ? "events" : "stats");
-  }, [tab, match, isLiveOrPaused]);
+  }, [tab, match, data, isLiveOrPaused]);
 
   if (data === null) {
     return (
@@ -125,10 +164,7 @@ export default function MatchPage({
   }
   if (data === undefined || match === null || tab === null) return null;
 
-  const { competition, stats, homeLineup, awayLineup, players } = data;
-  const homeClub = getClubForTeamId(match.homeTeamId);
-  const awayClub = getClubForTeamId(match.awayTeamId);
-  if (!homeClub || !awayClub) return null;
+  const { competition, stats, homeLineup, awayLineup, players, homeClub, awayClub, isRealFixture } = data;
 
   return (
     <div className="mx-auto flex h-dvh w-full max-w-md flex-col overflow-hidden bg-surface-page">
@@ -138,7 +174,11 @@ export default function MatchPage({
         homeClub={homeClub}
         awayClub={awayClub}
       />
-      <MatchTabBar value={tab} onValueChange={setTab} />
+      <MatchTabBar
+        value={tab}
+        onValueChange={setTab}
+        showMatchDetailTabs={!isRealFixture}
+      />
 
       <div className="flex flex-1 flex-col overflow-hidden">
         {tab === "events" && (

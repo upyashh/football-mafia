@@ -2,7 +2,7 @@ import type { Team } from "../types";
 import { clubs } from "./clubs";
 
 export const teams: Team[] = clubs.map((club) => ({
-  id: `team-${club.shortName.toLowerCase()}`,
+  id: `team-${club.id.replace(/^club-/, "")}`,
   clubId: club.id,
   name: club.name,
 }));
