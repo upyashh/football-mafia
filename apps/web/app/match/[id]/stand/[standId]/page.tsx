@@ -16,7 +16,7 @@ import {
 } from "@football-mafia/mock-data";
 import { useLiveMatch } from "@/lib/use-live-match";
 import { resetLiveMatchForTesting } from "@/lib/live-match-store";
-import { getSessionUser } from "@/lib/current-user";
+import { useCurrentUser } from "@/lib/use-current-user";
 import { StandHeader } from "@/components/stand-header";
 import { ChatTab } from "@/components/chat-tab";
 import { FlashPickFeedback } from "@/components/flash-pick-feedback";
@@ -26,7 +26,6 @@ type StandPageData = {
   competition: Competition;
   stand: Stand;
   events: MatchEvent[];
-  currentUser: User;
 };
 
 export default function StandPage({
@@ -39,6 +38,7 @@ export default function StandPage({
     undefined,
   );
   const live = useLiveMatch(id);
+  const sessionUser = useCurrentUser();
 
   useEffect(() => {
     let active = true;
@@ -55,7 +55,6 @@ export default function StandPage({
         getAllStands(),
         getMatchEvents(match.id),
       ]);
-      const currentUser = getSessionUser();
 
       const competition = competitions.find(
         (c) => c.id === match.competitionId,
@@ -66,7 +65,7 @@ export default function StandPage({
         if (active) setData(null);
         return;
       }
-      setData({ match, competition, stand, events, currentUser });
+      setData({ match, competition, stand, events });
     }
 
     load();
@@ -96,9 +95,14 @@ export default function StandPage({
       </div>
     );
   }
-  if (data === undefined || match === null) return null;
+  if (data === undefined || match === null || sessionUser == null) return null;
 
-  const { competition, stand, currentUser } = data;
+  const { competition, stand } = data;
+  const currentUser: User = {
+    id: sessionUser.id,
+    username: sessionUser.username,
+    clubId: sessionUser.clubId ?? clubs[0].id,
+  };
   const homeClub = getClubForTeamId(match.homeTeamId);
   const awayClub = getClubForTeamId(match.awayTeamId);
   if (!homeClub || !awayClub) return null;

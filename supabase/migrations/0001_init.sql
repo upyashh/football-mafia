@@ -1,22 +1,18 @@
--- Football Mafia — MVP schema
--- Derived from docs/technical-architecture.md §4. Room taxonomy locked
--- (docs/decisions.md, 2026-09-14): one global chat room per match.
+-- Football Mafia — identity + match-data cache schema
+-- Scope: real auth (profiles) + a durable cache for data fetched from the
+-- football data provider (competitions/clubs/teams/matches/match_events),
+-- plus the match log. Chat, Stands, predictions, moderation and the
+-- community feed stay on their current storage (Redis / not yet built) and
+-- are deliberately NOT included here — see docs/decisions.md and the
+-- "real identity + DB-backed match cache" plan for why this is scoped down
+-- from the original full-MVP schema.
 --
 -- Ordering matters: reference tables first, then matches/events, then
--- chat/feed/moderation, which reference profiles + matches.
+-- match_logs, which references both profiles and matches.
 
 -- ============================================================
 -- identity & reference
 -- ============================================================
-
-create table profiles (
-  id           uuid primary key references auth.users(id) on delete cascade,
-  username     text unique not null,
-  club_id      bigint references clubs(id),
-  country_code text,
-  avatar_url   text,
-  created_at   timestamptz not null default now()
-);
 
 create table competitions (
   id            bigserial primary key,
@@ -37,12 +33,18 @@ create table clubs (
   unique (provider_ref)
 );
 
--- profiles.club_id above forward-references clubs; fix it up now that
--- clubs exists (Postgres doesn't allow a table to reference one defined
--- later in the same file without this two-step).
-alter table profiles
-  add constraint profiles_club_id_fkey
-  foreign key (club_id) references clubs(id);
+create table profiles (
+  id           uuid primary key references auth.users(id) on delete cascade,
+  username     text unique not null,
+  -- Mock-data club fixture id (e.g. "club-ars"), NOT a FK to clubs.id below.
+  -- The club picker UI still runs entirely off packages/mock-data's static
+  -- clubs fixture for this pass (see the plan's scope note) — the clubs
+  -- table here only backs the match-data cache's FKs.
+  club_id      text,
+  country_code text,
+  avatar_url   text,
+  created_at   timestamptz not null default now()
+);
 
 create table teams (
   id           bigserial primary key,
@@ -52,7 +54,10 @@ create table teams (
 );
 
 -- ============================================================
--- matches & events (written by the ingestion worker / service role only)
+-- matches & events — the data-access cache layer's write target.
+-- Written only by the service role (apps/web/lib/match-data.ts), never
+-- directly by clients: see the "matches/match_events writable" policies
+-- below (there are none for the authenticated role — default-deny).
 -- ============================================================
 
 create table matches (
@@ -85,75 +90,6 @@ create table match_events (
 );
 
 -- ============================================================
--- live rooms & chat
--- ============================================================
-
--- MVP: exactly one 'global' room per match — see docs/decisions.md.
--- Do not build room-selection UI against this table; it's a 1:1 with matches.
-create table chat_rooms (
-  id         bigserial primary key,
-  match_id   bigint not null references matches(id) on delete cascade,
-  type       text not null default 'global',
-  created_at timestamptz not null default now(),
-  unique (match_id, type)
-);
-
-create table messages (
-  id         bigserial primary key,
-  room_id    bigint not null references chat_rooms(id) on delete cascade,
-  user_id    uuid not null references profiles(id),
-  body       text not null,
-  created_at timestamptz not null default now(),
-  deleted_at timestamptz
-);
-create index messages_room_created_idx on messages (room_id, created_at desc);
-
-create table reactions (
-  message_id bigint not null references messages(id) on delete cascade,
-  user_id    uuid not null references profiles(id),
-  emoji      text not null,
-  primary key (message_id, user_id, emoji)
-);
-
--- ============================================================
--- community feed
--- ============================================================
-
-create table posts (
-  id         bigserial primary key,
-  author_id  uuid not null references profiles(id),
-  club_id    bigint not null references clubs(id),
-  body       text,
-  image_url  text,
-  created_at timestamptz not null default now(),
-  deleted_at timestamptz
-);
-create index posts_club_created_idx on posts (club_id, created_at desc);
-
-create table comments (
-  id         bigserial primary key,
-  post_id    bigint not null references posts(id) on delete cascade,
-  author_id  uuid not null references profiles(id),
-  body       text not null,
-  created_at timestamptz not null default now(),
-  deleted_at timestamptz
-);
-
-create table likes (
-  post_id bigint not null references posts(id) on delete cascade,
-  user_id uuid not null references profiles(id),
-  primary key (post_id, user_id)
-);
-
-create table follows (
-  follower_id uuid not null references profiles(id),
-  followee_id uuid not null references profiles(id),
-  created_at  timestamptz not null default now(),
-  primary key (follower_id, followee_id),
-  check (follower_id <> followee_id)
-);
-
--- ============================================================
 -- match log (single-player value)
 -- ============================================================
 
@@ -169,48 +105,7 @@ create table match_logs (
 );
 
 -- ============================================================
--- moderation
--- ============================================================
-
-create table reports (
-  id          bigserial primary key,
-  reporter_id uuid not null references profiles(id),
-  target_type text not null check (target_type in ('message', 'post', 'comment')),
-  target_id   bigint not null,
-  reason      text,
-  status      text not null default 'open' check (status in ('open', 'reviewed', 'actioned')),
-  created_at  timestamptz not null default now()
-);
-
-create table mutes (
-  muter_id uuid not null references profiles(id),
-  muted_id uuid not null references profiles(id),
-  primary key (muter_id, muted_id),
-  check (muter_id <> muted_id)
-);
-
-create table blocked_words (
-  word text primary key
-);
-
--- ============================================================
--- Phase 2 (forward-compat only — not built now)
--- ============================================================
-
-create table predictions (
-  id         bigserial primary key,
-  user_id    uuid not null references profiles(id),
-  match_id   bigint not null references matches(id),
-  home_pred  int not null,
-  away_pred  int not null,
-  points     int,
-  created_at timestamptz not null default now(),
-  unique (user_id, match_id)
-);
-
--- ============================================================
 -- RLS — default-deny everywhere; explicit policies grant access.
--- See docs/technical-architecture.md §4/§9 for the intent this encodes.
 -- ============================================================
 
 alter table profiles enable row level security;
@@ -219,80 +114,55 @@ alter table clubs enable row level security;
 alter table teams enable row level security;
 alter table matches enable row level security;
 alter table match_events enable row level security;
-alter table chat_rooms enable row level security;
-alter table messages enable row level security;
-alter table reactions enable row level security;
-alter table posts enable row level security;
-alter table comments enable row level security;
-alter table likes enable row level security;
-alter table follows enable row level security;
 alter table match_logs enable row level security;
-alter table reports enable row level security;
-alter table mutes enable row level security;
-alter table blocked_words enable row level security;
-alter table predictions enable row level security;
 
--- ---- reference tables: readable by any authenticated client, ----
--- ---- writable only by the service role (the ingestion worker). ----
+-- ---- reference + match data: readable by any client, writable only by ----
+-- ---- the service role (match-data.ts's cache writer bypasses RLS). ----
 create policy "competitions readable" on competitions for select using (true);
 create policy "clubs readable" on clubs for select using (true);
 create policy "teams readable" on teams for select using (true);
 create policy "matches readable" on matches for select using (true);
 create policy "match_events readable" on match_events for select using (true);
-create policy "chat_rooms readable" on chat_rooms for select using (true);
-create policy "blocked_words readable" on blocked_words for select using (true);
--- No insert/update/delete policies on these for the `authenticated` role:
--- default-deny means only the service role (which bypasses RLS) can write.
 
 -- ---- profiles: public read, owner write ----
 create policy "profiles readable" on profiles for select using (true);
 create policy "profiles insert own" on profiles for insert with check (id = auth.uid());
 create policy "profiles update own" on profiles for update using (id = auth.uid());
 
--- ---- messages: room members read (MVP: any authenticated user, since ----
--- ---- rooms aren't access-gated in v1), owner writes, excl. soft-deleted ----
-create policy "messages readable" on messages for select
-  using (deleted_at is null);
-create policy "messages insert own" on messages for insert
-  with check (user_id = auth.uid());
-create policy "messages soft-delete own" on messages for update
-  using (user_id = auth.uid());
-
-create policy "reactions readable" on reactions for select using (true);
-create policy "reactions manage own" on reactions for insert with check (user_id = auth.uid());
-create policy "reactions delete own" on reactions for delete using (user_id = auth.uid());
-
--- ---- community feed ----
-create policy "posts readable" on posts for select using (deleted_at is null);
-create policy "posts insert own" on posts for insert with check (author_id = auth.uid());
-create policy "posts soft-delete own" on posts for update using (author_id = auth.uid());
-
-create policy "comments readable" on comments for select using (deleted_at is null);
-create policy "comments insert own" on comments for insert with check (author_id = auth.uid());
-create policy "comments soft-delete own" on comments for update using (author_id = auth.uid());
-
-create policy "likes readable" on likes for select using (true);
-create policy "likes manage own" on likes for insert with check (user_id = auth.uid());
-create policy "likes delete own" on likes for delete using (user_id = auth.uid());
-
-create policy "follows readable" on follows for select using (true);
-create policy "follows manage own" on follows for insert with check (follower_id = auth.uid());
-create policy "follows delete own" on follows for delete using (follower_id = auth.uid());
-
 -- ---- match log: private to the owner ----
 create policy "match_logs owner read" on match_logs for select using (user_id = auth.uid());
 create policy "match_logs owner write" on match_logs for insert with check (user_id = auth.uid());
 create policy "match_logs owner update" on match_logs for update using (user_id = auth.uid());
 
--- ---- moderation: users see/manage only their own actions ----
-create policy "reports owner read" on reports for select using (reporter_id = auth.uid());
-create policy "reports owner insert" on reports for insert with check (reporter_id = auth.uid());
+-- ============================================================
+-- seed data — static reference fixtures, mirrors
+-- packages/mock-data/src/fixtures/{competitions,clubs,teams}.ts.
+-- provider_ref values match the mock-openfoot scenario ids/team ids in
+-- packages/mock-data/src/provider/scenarios.ts so the cache layer's upserts
+-- land on these same rows once real match data starts flowing through it.
+-- ============================================================
 
-create policy "mutes owner read" on mutes for select using (muter_id = auth.uid());
-create policy "mutes owner insert" on mutes for insert with check (muter_id = auth.uid());
-create policy "mutes owner delete" on mutes for delete using (muter_id = auth.uid());
+insert into competitions (provider_ref, name, country_code) values
+  ('comp-pl', 'Premier League', 'GB'),
+  ('comp-laliga', 'La Liga', 'ES'),
+  ('comp-ucl', 'Champions League', 'EU');
 
--- ---- predictions (Phase 2 forward-compat; not exposed to the app yet) ----
-create policy "predictions owner read" on predictions for select using (user_id = auth.uid());
-create policy "predictions owner insert" on predictions for insert
-  with check (user_id = auth.uid() and now() < (select kickoff_at from matches where id = match_id));
+insert into clubs (competition_id, name, short_name, primary_color, secondary_color, provider_ref) values
+  ((select id from competitions where provider_ref = 'comp-pl'), 'Arsenal', 'ARS', '#EF0107', '#FFFFFF', 'club-ars'),
+  ((select id from competitions where provider_ref = 'comp-pl'), 'Manchester City', 'MCI', '#6CABDD', '#1C2C5B', 'club-mci'),
+  ((select id from competitions where provider_ref = 'comp-pl'), 'Liverpool', 'LIV', '#C8102E', '#F6EB61', 'club-liv'),
+  ((select id from competitions where provider_ref = 'comp-pl'), 'Manchester United', 'MUN', '#DA291C', '#FBE122', 'club-mun'),
+  ((select id from competitions where provider_ref = 'comp-laliga'), 'Real Madrid', 'RMA', '#FEBE10', '#00529F', 'club-rma'),
+  ((select id from competitions where provider_ref = 'comp-laliga'), 'Barcelona', 'FCB', '#A50044', '#004D98', 'club-fcb'),
+  ((select id from competitions where provider_ref = 'comp-laliga'), 'Atletico Madrid', 'ATM', '#CB3524', '#FFFFFF', 'club-atm');
+
+-- Provider-shape team refs (team_<name>_<country>) used by the mock-openfoot
+-- scenarios — distinct from the internal fixtures' team-<shortname> ids.
+insert into teams (club_id, provider_ref, name) values
+  ((select id from clubs where provider_ref = 'club-ars'), 'team_arsenal_gb', 'Arsenal'),
+  ((select id from clubs where provider_ref = 'club-mci'), 'team_manchester_city_gb', 'Manchester City'),
+  ((select id from clubs where provider_ref = 'club-liv'), 'team_liverpool_gb', 'Liverpool'),
+  ((select id from clubs where provider_ref = 'club-mun'), 'team_manchester_united_gb', 'Manchester United'),
+  ((select id from clubs where provider_ref = 'club-rma'), 'team_real_madrid_es', 'Real Madrid'),
+  ((select id from clubs where provider_ref = 'club-fcb'), 'team_barcelona_es', 'Barcelona'),
+  ((select id from clubs where provider_ref = 'club-atm'), 'team_atletico_madrid_es', 'Atletico Madrid');

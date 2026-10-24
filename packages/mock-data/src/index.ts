@@ -7,7 +7,6 @@ import { matchStats } from "./fixtures/matchStats";
 import { lineups } from "./fixtures/lineups";
 import { feedPosts } from "./fixtures/feedPosts";
 import { matchLogs } from "./fixtures/matchLogs";
-import { currentUser } from "./fixtures/users";
 import {
   allLiveScripts,
   findLiveScript,
@@ -25,7 +24,6 @@ export * from "./live-match";
 // should prefer the async getters below.
 export { clubs } from "./fixtures/clubs";
 export { competitions } from "./fixtures/competitions";
-export { currentUser } from "./fixtures/users";
 export { setLiveMatchKickoff } from "./fixtures/liveMatch";
 
 /** Sync lookup: a match's homeTeamId/awayTeamId -> the Club that team represents. */
@@ -117,10 +115,6 @@ export async function getMatchLogs(userId: string) {
     .sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
-}
-
-export async function getCurrentUser() {
-  return currentUser;
 }
 
 export async function getAllStands() {
